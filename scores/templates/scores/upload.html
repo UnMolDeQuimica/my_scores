@@ -1,0 +1,59 @@
+{% extends "scores/base.html" %}
+{% block title %}Upload Score — Score Manager{% endblock %}
+{% block page_title %}Upload Score{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body p-4">
+                <h5 class="card-title mb-3">Upload a MusicXML Score</h5>
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Name <span class="text-danger">*</span></label>
+                        {{ form.name }}
+                        {% if form.name.errors %}
+                        <div class="text-danger small mt-1">{{ form.name.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Author</label>
+                        {{ form.author }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Groups</label>
+                        <select name="groups" id="groupsSelect" multiple>
+                            {% for g in groups %}
+                            <option value="{{ g.id }}">{{ g.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">File <span class="text-danger">*</span></label>
+                        {{ form.file }}
+                        {% if form.file.errors %}
+                        <div class="text-danger small mt-1">{{ form.file.errors.0 }}</div>
+                        {% endif %}
+                        <div class="form-text">Accepted formats: .xml, .musicxml, .mxl</div>
+                    </div>
+                    <button type="submit" class="btn btn-dark w-100 py-2 fw-semibold">
+                        <i class="bi bi-cloud-upload me-1"></i> Upload
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        new TomSelect('#groupsSelect', {
+            plugins: ['remove_button'],
+            create: false,
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,163 @@
+{% extends "scores/base.html" %}
+{% block title %}Groups — Score Manager{% endblock %}
+{% block page_title %}Groups{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Create group -->
+    <div class="col-lg-4 mb-3">
+        <div class="card">
+            <div class="card-body p-4">
+                <h6 class="fw-semibold mb-3">Create Group</h6>
+                <form id="createGroupForm">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="newGroupName" placeholder="Group name" required>
+                    </div>
+                    <button type="submit" class="btn btn-dark w-100 fw-semibold">
+                        <i class="bi bi-plus-circle me-1"></i> Create
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Groups list -->
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="font-size:.78rem; text-transform:uppercase; letter-spacing:.03em; color:#64748b;">Name</th>
+                            <th style="width:120px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="groupTableBody">
+                        {% for g in groups %}
+                        <tr data-id="{{ g.id }}">
+                            <td>
+                                <span class="editable-cell" contenteditable="true"
+                                      data-id="{{ g.id }}"
+                                      onblur="updateGroup(this)"
+                                      onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">{{ g.name }}</span>
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-danger" onclick="deleteGroup({{ g.id }}, this)">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if not groups %}
+            <div id="emptyGroups" class="text-center text-muted py-4">
+                No groups yet. Create one using the form.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.getElementById('createGroupForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const nameInput = document.getElementById('newGroupName');
+        const name = nameInput.value.trim();
+        if (!name) return;
+
+        const formData = new FormData();
+        formData.append('name', name);
+
+        fetch('/groups/create/', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': csrftoken },
+            body: formData,
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                showToast('Group created');
+                // Add row to table
+                const tbody = document.getElementById('groupTableBody');
+                const emptyEl = document.getElementById('emptyGroups');
+                if (emptyEl) emptyEl.style.display = 'none';
+
+                tbody.insertAdjacentHTML('beforeend', `
+                    <tr data-id="${data.id}">
+                        <td>
+                            <span class="editable-cell" contenteditable="true"
+                                  data-id="${data.id}"
+                                  onblur="updateGroup(this)"
+                                  onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+                            >${escapeHtml(data.name)}</span>
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(${data.id}, this)">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                `);
+                nameInput.value = '';
+            } else {
+                const errMsg = typeof data.error === 'object' ? JSON.stringify(data.error) : data.error;
+                showToast(errMsg, 'error');
+            }
+        })
+        .catch(() => showToast('Network error', 'error'));
+    });
+
+    function updateGroup(el) {
+        const groupId = el.dataset.id;
+        const name = el.textContent.trim();
+
+        fetch(`/groups/${groupId}/update/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken,
+            },
+            body: JSON.stringify({ name }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast(data.error, 'error');
+                location.reload();
+            } else {
+                showToast('Group updated');
+            }
+        })
+        .catch(() => showToast('Network error', 'error'));
+    }
+
+    function deleteGroup(id, btn) {
+        if (!confirm('Delete this group? Scores in this group will not be deleted.')) return;
+
+        fetch(`/groups/${id}/delete/`, {
+            method: 'POST',
+            headers: { 'X-CSRFToken': csrftoken },
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                btn.closest('tr').remove();
+                showToast('Group deleted');
+            } else {
+                showToast(data.error || 'Error', 'error');
+            }
+        })
+        .catch(() => showToast('Network error', 'error'));
+    }
+
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text || '';
+        return d.innerHTML;
+    }
+</script>
+{% endblock %}

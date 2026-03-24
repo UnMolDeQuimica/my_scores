@@ -1,0 +1,577 @@
+{% extends "scores/base.html" %}
+{% load static %}
+{% block title %}View Scores — Score Manager{% endblock %}
+{% block page_title %}View Scores{% endblock %}
+
+{% block extra_head %}
+<style>
+    #osmdContainer { position: relative; }
+    #osmdLoading {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,.85);
+        z-index: 10;
+    }
+    .zoom-controls {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        margin-bottom: .75rem;
+        flex-wrap: wrap;
+    }
+    .zoom-controls .btn { padding: .25rem .6rem; }
+    #zoomLevel {
+        font-weight: 600;
+        font-size: .9rem;
+        min-width: 3.5rem;
+        text-align: center;
+    }
+    .playback-controls {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+    .playback-controls .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+    }
+    .playback-status {
+        font-size: .9rem;
+        min-width: 8rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="filter-bar">
+    <div class="form-group">
+        <label>Score</label>
+        <select id="scoreSelect" placeholder="Search scores...">
+            <option value="">Select a score...</option>
+            {% for s in scores %}
+            <option value="{{ s.id }}" data-author="{{ s.author }}" data-groups="{{ s.groups.all|join:',' }}">
+                {{ s.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label>Author</label>
+        <input type="text" id="filterAuthor" placeholder="Filter by author...">
+    </div>
+    <div class="form-group">
+        <label>Group</label>
+        <select id="filterGroup">
+            <option value="">All groups</option>
+            {% for g in groups %}
+            <option value="{{ g.id }}">{{ g.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearFilters()">
+            <i class="bi bi-x-circle"></i> Clear
+        </button>
+    </div>
+</div>
+
+<!-- Zoom controls -->
+<div class="zoom-controls">
+    <button class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">
+        <i class="bi bi-zoom-out"></i>
+    </button>
+    <span id="zoomLevel">100%</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">
+        <i class="bi bi-zoom-in"></i>
+    </button>
+</div>
+
+<!-- Playback controls -->
+<div class="playback-controls">
+    <button id="playbackPlayPause" class="btn btn-sm btn-outline-primary" type="button" disabled>
+        <i class="bi bi-play-fill"></i>
+        <span class="playback-label">Play</span>
+    </button>
+    <button id="playbackStop" class="btn btn-sm btn-outline-secondary" type="button" disabled>
+        <i class="bi bi-stop-fill"></i>
+        <span>Stop</span>
+    </button>
+    <button id="playbackRestart" class="btn btn-sm btn-outline-secondary" type="button" disabled>
+        <i class="bi bi-skip-backward-fill"></i>
+        <span>Restart</span>
+    </button>
+    <button id="playbackSettings" class="btn btn-sm btn-outline-secondary" type="button" disabled>
+        <i class="bi bi-sliders"></i>
+        <span>Settings</span>
+    </button>
+    <span id="playbackStatus" class="text-muted playback-status">No score loaded</span>
+</div>
+
+<!-- OSMD container -->
+<div id="osmdContainer">
+    <div id="osmdLoading" style="display:none;">
+        <div class="spinner-border text-secondary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+    <div id="osmdCanvas"></div>
+    <p id="osmdPlaceholder" class="text-muted text-center py-5" style="font-size:1.1rem;">
+        Select a score from the dropdown above to display it.
+    </p>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'scores/js/opensheetmusicdisplay.min.js' %}"></script>
+<script>
+    let osmd = null;
+    let zoom = 1.0;
+    let scoreSelect;
+
+    let playbackTimingSource = null;
+    let playbackManager = null;
+    let playbackControlPanel = null;
+    let playbackReady = false;
+    let playbackIsPlaying = false;
+    let playbackControlsOpen = false;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize Tom Select for searchable dropdown
+        scoreSelect = new TomSelect('#scoreSelect', {
+            create: false,
+            sortField: { field: 'text', direction: 'asc' },
+            onChange: function(value) {
+                if (value) loadScore(value);
+            }
+        });
+
+        // Filter listeners
+        document.getElementById('filterAuthor').addEventListener('input', debounce(applyFilters, 300));
+        document.getElementById('filterGroup').addEventListener('change', applyFilters);
+
+        bindPlaybackControls();
+        updateZoom();
+        setPlaybackButtonsEnabled(false);
+        setPlaybackStatus('No score loaded');
+        setPlayPauseUi(false);
+    });
+
+    function applyFilters() {
+        const author = document.getElementById('filterAuthor').value.trim().toLowerCase();
+        const groupId = document.getElementById('filterGroup').value;
+
+        fetch(`/api/scores/?author=${encodeURIComponent(author)}&group=${encodeURIComponent(groupId)}`)
+            .then(r => r.json())
+            .then(data => {
+                scoreSelect.clear(true);
+                scoreSelect.clearOptions();
+                data.scores.forEach(s => {
+                    scoreSelect.addOption({
+                        value: s.id,
+                        text: s.name
+                    });
+                });
+                scoreSelect.refreshOptions(false);
+            });
+    }
+
+    function clearFilters() {
+        document.getElementById('filterAuthor').value = '';
+        document.getElementById('filterGroup').value = '';
+        applyFilters();
+        location.reload();
+    }
+
+    function loadScore(scoreId) {
+        const container = document.getElementById('osmdCanvas');
+        const loading = document.getElementById('osmdLoading');
+        const placeholder = document.getElementById('osmdPlaceholder');
+
+        placeholder.style.display = 'none';
+        loading.style.display = 'flex';
+
+        resetPlaybackState(true);
+        setPlaybackStatus('Loading...');
+        setPlaybackButtonsEnabled(false);
+
+        const url = `/scores/${scoreId}/file/`;
+
+        if (!osmd) {
+            osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
+                autoResize: true,
+                backend: 'svg',
+                drawTitle: true
+            });
+        }
+
+        osmd.load(url).then(() => {
+            osmd.zoom = zoom;
+            osmd.render();
+            initializePlaybackForCurrentScore();
+            loading.style.display = 'none';
+        }).catch(err => {
+            loading.style.display = 'none';
+            notify('Error loading score: ' + err.message, 'error');
+            console.error(err);
+        });
+    }
+
+    function zoomIn() {
+        zoom = Math.min(zoom + 0.1, 3.0);
+        updateZoom();
+    }
+
+    function zoomOut() {
+        zoom = Math.max(zoom - 0.1, 0.3);
+        updateZoom();
+    }
+
+    function updateZoom() {
+        document.getElementById('zoomLevel').textContent = Math.round(zoom * 100) + '%';
+        if (osmd) {
+            osmd.zoom = zoom;
+            osmd.render();
+        }
+    }
+
+    function bindPlaybackControls() {
+        document.getElementById('playbackPlayPause').addEventListener('click', togglePlayback);
+        document.getElementById('playbackStop').addEventListener('click', stopPlayback);
+        document.getElementById('playbackRestart').addEventListener('click', restartPlayback);
+        document.getElementById('playbackSettings').addEventListener('click', togglePlaybackSettings);
+    }
+
+    function resolvePlaybackClasses() {
+        const api = window.opensheetmusicdisplay || {};
+        return {
+            LinearTimingSource: api.LinearTimingSource || window.LinearTimingSource,
+            PlaybackManager: api.PlaybackManager || window.PlaybackManager,
+            BasicAudioPlayer: api.BasicAudioPlayer || window.BasicAudioPlayer,
+            ControlPanel: api.ControlPanel || window.ControlPanel
+        };
+    }
+
+    function initializePlaybackForCurrentScore() {
+        if (!osmd || !osmd.Sheet || !osmd.Sheet.musicPartManager) {
+            setPlaybackButtonsEnabled(false);
+            setPlaybackStatus('Playback unavailable');
+            return;
+        }
+
+        const classes = resolvePlaybackClasses();
+        if (!classes.LinearTimingSource || !classes.PlaybackManager || !classes.BasicAudioPlayer || !classes.ControlPanel) {
+            setPlaybackButtonsEnabled(false);
+            setPlaybackStatus('Playback unavailable');
+            notify('Playback classes are not available in the loaded OSMD build.', 'error');
+            return;
+        }
+
+        try {
+            playbackTimingSource = new classes.LinearTimingSource();
+            playbackManager = new classes.PlaybackManager(
+                playbackTimingSource,
+                undefined,
+                new classes.BasicAudioPlayer(),
+                undefined
+            );
+
+            playbackManager.DoPlayback = true;
+            playbackManager.DoPreCount = false;
+            playbackManager.PreCountMeasures = 1;
+
+            playbackControlPanel = new classes.ControlPanel();
+            playbackControlPanel.playbackManager = playbackManager;
+
+            if (typeof playbackControlPanel.addListener === 'function') {
+                playbackControlPanel.addListener(playbackManager);
+            }
+
+            if (typeof playbackTimingSource.reset === 'function') playbackTimingSource.reset();
+            if (typeof playbackTimingSource.pause === 'function') playbackTimingSource.pause();
+            playbackTimingSource.Settings = osmd.Sheet.playbackSettings;
+
+            if (typeof playbackManager.initialize === 'function') {
+                playbackManager.initialize(osmd.Sheet.musicPartManager);
+            }
+
+            if (osmd.cursor) {
+                try {
+                    osmd.cursor.reset();
+                    osmd.cursor.hide();
+                } catch (e) {}
+
+                if (typeof playbackManager.addListener === 'function') {
+                    playbackManager.addListener(osmd.cursor);
+                }
+            }
+
+            if (typeof playbackManager.addListener === 'function') {
+                playbackManager.addListener(playbackControlPanel);
+            }
+
+            if (typeof playbackManager.reset === 'function') {
+                playbackManager.reset();
+            }
+
+            osmd.PlaybackManager = playbackManager;
+
+            if (typeof playbackControlPanel.clearVolumeTracks === 'function') {
+                playbackControlPanel.clearVolumeTracks();
+            }
+
+            if (
+                playbackManager.Metronome &&
+                typeof playbackControlPanel.addVolumeTrack === 'function'
+            ) {
+                playbackControlPanel.addVolumeTrack(
+                    playbackManager.Metronome.Name,
+                    playbackManager.Metronome.Id,
+                    (playbackManager.Metronome.Volume || 0) * 100
+                );
+            }
+
+            const mapping = playbackManager.InstrumentIdMapping;
+            if (mapping && typeof mapping.keys === 'function' && typeof playbackControlPanel.addVolumeTrack === 'function') {
+                for (const instrId of mapping.keys()) {
+                    let instrument = null;
+
+                    if (typeof mapping.getValue === 'function') {
+                        instrument = mapping.getValue(instrId);
+                    } else if (typeof mapping.get === 'function') {
+                        instrument = mapping.get(instrId);
+                    }
+
+                    if (instrument) {
+                        playbackControlPanel.addVolumeTrack(
+                            instrument.Name,
+                            instrId,
+                            (instrument.Volume || 0) * 100
+                        );
+                    }
+                }
+            }
+
+            if (typeof playbackControlPanel.bpmChanged === 'function') {
+                playbackControlPanel.bpmChanged(osmd.Sheet.DefaultStartTempoInBpm);
+            }
+
+            playbackReady = true;
+            playbackIsPlaying = false;
+            playbackControlsOpen = false;
+            setPlayPauseUi(false);
+            setPlaybackButtonsEnabled(true);
+            setPlaybackStatus('Ready');
+        } catch (err) {
+            console.error(err);
+            resetPlaybackState(true);
+            setPlaybackStatus('Playback error');
+            notify('Error initializing playback: ' + err.message, 'error');
+        }
+    }
+
+    function togglePlayback() {
+        if (!playbackReady || !playbackTimingSource) return;
+
+        if (playbackIsPlaying) {
+            pausePlayback();
+        } else {
+            startPlayback();
+        }
+    }
+
+    function startPlayback() {
+        if (!playbackReady || !playbackTimingSource) return;
+
+        try {
+            if (osmd && osmd.cursor) {
+                try {
+                    osmd.cursor.show();
+                } catch (e) {}
+            }
+
+            if (typeof playbackManager?.play === 'function') {
+                playbackManager.play();
+            } else if (typeof playbackManager?.resume === 'function') {
+                playbackManager.resume();
+            } else if (typeof playbackTimingSource.play === 'function') {
+                playbackTimingSource.play();
+            } else if (typeof playbackTimingSource.start === 'function') {
+                playbackTimingSource.start();
+            }
+
+            playbackIsPlaying = true;
+            setPlayPauseUi(true);
+            setPlaybackStatus('Playing');
+        } catch (err) {
+            console.error(err);
+            notify('Error starting playback: ' + err.message, 'error');
+        }
+    }
+
+    function pausePlayback() {
+        if (!playbackTimingSource) return;
+
+        try {
+            if (typeof playbackManager?.pause === 'function') {
+                playbackManager.pause();
+            } else if (typeof playbackTimingSource.pause === 'function') {
+                playbackTimingSource.pause();
+            }
+
+            playbackIsPlaying = false;
+            setPlayPauseUi(false);
+            setPlaybackStatus('Paused');
+        } catch (err) {
+            console.error(err);
+            notify('Error pausing playback: ' + err.message, 'error');
+        }
+    }
+
+    function stopPlayback() {
+        if (!playbackTimingSource && !playbackManager) return;
+
+        try {
+            if (typeof playbackManager?.stop === 'function') {
+                playbackManager.stop();
+            }
+
+            if (typeof playbackTimingSource?.reset === 'function') {
+                playbackTimingSource.reset();
+            }
+
+            if (typeof playbackTimingSource?.pause === 'function') {
+                playbackTimingSource.pause();
+            }
+
+            if (typeof playbackManager?.reset === 'function') {
+                playbackManager.reset();
+            }
+
+            if (osmd && osmd.cursor) {
+                try {
+                    osmd.cursor.reset();
+                    osmd.cursor.hide();
+                } catch (e) {}
+            }
+
+            playbackIsPlaying = false;
+            setPlayPauseUi(false);
+            setPlaybackStatus(playbackReady ? 'Stopped' : 'No score loaded');
+        } catch (err) {
+            console.error(err);
+            notify('Error stopping playback: ' + err.message, 'error');
+        }
+    }
+
+    function restartPlayback() {
+        if (!playbackReady) return;
+        stopPlayback();
+        startPlayback();
+    }
+
+    function togglePlaybackSettings() {
+        if (!playbackControlPanel) return;
+
+        try {
+            if (playbackControlsOpen) {
+                if (typeof playbackControlPanel.hideAndClear === 'function') {
+                    playbackControlPanel.hideAndClear();
+                } else if (typeof playbackControlPanel.hideControls === 'function') {
+                    playbackControlPanel.hideControls();
+                } else if (typeof playbackControlPanel.hide === 'function') {
+                    playbackControlPanel.hide();
+                }
+                playbackControlsOpen = false;
+            } else {
+                if (typeof playbackControlPanel.show === 'function') {
+                    playbackControlPanel.show();
+                }
+                playbackControlsOpen = true;
+            }
+        } catch (err) {
+            console.error(err);
+            notify('Error toggling playback settings: ' + err.message, 'error');
+        }
+    }
+
+    function resetPlaybackState(clearStatus = false) {
+        try {
+            if (playbackControlPanel) {
+                if (typeof playbackControlPanel.hideAndClear === 'function') {
+                    playbackControlPanel.hideAndClear();
+                } else if (typeof playbackControlPanel.hide === 'function') {
+                    playbackControlPanel.hide();
+                }
+            }
+        } catch (e) {}
+
+        try {
+            if (typeof playbackTimingSource?.pause === 'function') playbackTimingSource.pause();
+            if (typeof playbackTimingSource?.reset === 'function') playbackTimingSource.reset();
+            if (typeof playbackManager?.reset === 'function') playbackManager.reset();
+        } catch (e) {}
+
+        playbackTimingSource = null;
+        playbackManager = null;
+        playbackControlPanel = null;
+        playbackReady = false;
+        playbackIsPlaying = false;
+        playbackControlsOpen = false;
+
+        if (osmd && osmd.cursor) {
+            try {
+                osmd.cursor.reset();
+                osmd.cursor.hide();
+            } catch (e) {}
+        }
+
+        setPlayPauseUi(false);
+
+        if (clearStatus) {
+            setPlaybackStatus('No score loaded');
+        }
+    }
+
+    function setPlaybackButtonsEnabled(enabled) {
+        document.getElementById('playbackPlayPause').disabled = !enabled;
+        document.getElementById('playbackStop').disabled = !enabled;
+        document.getElementById('playbackRestart').disabled = !enabled;
+        document.getElementById('playbackSettings').disabled = !enabled;
+    }
+
+    function setPlaybackStatus(text) {
+        document.getElementById('playbackStatus').textContent = text;
+    }
+
+    function setPlayPauseUi(isPlaying) {
+        const button = document.getElementById('playbackPlayPause');
+        const icon = button.querySelector('i');
+        const label = button.querySelector('.playback-label');
+
+        icon.className = isPlaying ? 'bi bi-pause-fill' : 'bi bi-play-fill';
+        label.textContent = isPlaying ? 'Pause' : 'Play';
+    }
+
+    function notify(message, type = 'info') {
+        if (typeof showToast === 'function') {
+            showToast(message, type);
+        } else if (type === 'error') {
+            console.error(message);
+        } else {
+            console.log(message);
+        }
+    }
+
+    function debounce(fn, ms) {
+        let timer;
+        return function(...args) {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), ms);
+        };
+    }
+</script>
+{% endblock %}

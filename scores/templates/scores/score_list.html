@@ -1,0 +1,259 @@
+{% extends "scores/base.html" %}
+{% block title %}Score List — Score Manager{% endblock %}
+{% block page_title %}Score List{% endblock %}
+
+{% block extra_head %}
+<style>
+    .score-table th { 
+        font-size: .78rem; 
+        text-transform: uppercase; 
+        letter-spacing: .03em; 
+        color: #64748b;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .score-table td { vertical-align: middle; }
+    .group-badges .badge {
+        font-weight: 500;
+        font-size: .78rem;
+        margin-right: .25rem;
+        margin-bottom: .15rem;
+    }
+    .ts-wrapper.multi .ts-control {
+        min-height: 30px;
+        padding: 2px 6px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="filter-bar">
+    <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="filterName" placeholder="Filter by name...">
+    </div>
+    <div class="form-group">
+        <label>Author</label>
+        <input type="text" id="filterAuthor" placeholder="Filter by author...">
+    </div>
+    <div class="form-group">
+        <label>Group</label>
+        <select id="filterGroup">
+            <option value="">All groups</option>
+            {% for g in groups %}
+            <option value="{{ g.id }}">{{ g.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearFilters()">
+            <i class="bi bi-x-circle"></i> Clear
+        </button>
+    </div>
+</div>
+
+<!-- Table -->
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0 score-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Author</th>
+                    <th>Groups</th>
+                    <th>Created</th>
+                    <th style="width:80px;"></th>
+                </tr>
+            </thead>
+            <tbody id="scoreTableBody">
+                <!-- Filled by JS -->
+            </tbody>
+        </table>
+    </div>
+    <div id="emptyState" class="text-center text-muted py-4" style="display:none;">
+        No scores found. <a href="{% url 'upload_score' %}">Upload one</a>.
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let allGroups = {{ groups|safe }};
+</script>
+<script>
+    // Store groups from Django context
+    const groupsMap = {};
+    {% for g in groups %}
+    groupsMap[{{ g.id }}] = "{{ g.name|escapejs }}";
+    {% endfor %}
+
+    const allGroupIds = Object.keys(groupsMap);
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadScores();
+
+        document.getElementById('filterName').addEventListener('input', debounce(loadScores, 300));
+        document.getElementById('filterAuthor').addEventListener('input', debounce(loadScores, 300));
+        document.getElementById('filterGroup').addEventListener('change', loadScores);
+    });
+
+    function loadScores() {
+        const name = document.getElementById('filterName').value.trim();
+        const author = document.getElementById('filterAuthor').value.trim();
+        const group = document.getElementById('filterGroup').value;
+
+        const params = new URLSearchParams();
+        if (name) params.set('name', name);
+        if (author) params.set('author', author);
+        if (group) params.set('group', group);
+
+        fetch(`/api/scores/?${params}`)
+            .then(r => r.json())
+            .then(data => renderTable(data.scores));
+    }
+
+    function renderTable(scores) {
+        const tbody = document.getElementById('scoreTableBody');
+        const empty = document.getElementById('emptyState');
+
+        if (scores.length === 0) {
+            tbody.innerHTML = '';
+            empty.style.display = 'block';
+            return;
+        }
+
+        empty.style.display = 'none';
+        tbody.innerHTML = scores.map(s => `
+            <tr data-id="${s.id}">
+                <td>
+                    <span class="editable-cell" contenteditable="true"
+                          data-field="name" data-id="${s.id}"
+                          onblur="saveField(this)"
+                          onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+                    >${escapeHtml(s.name)}</span>
+                </td>
+                <td>
+                    <span class="editable-cell" contenteditable="true"
+                          data-field="author" data-id="${s.id}"
+                          onblur="saveField(this)"
+                          onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+                    >${escapeHtml(s.author)}</span>
+                </td>
+                <td>
+                    <select class="group-select" data-id="${s.id}" multiple
+                            style="min-width:160px;">
+                        ${allGroupIds.map(gid => `
+                            <option value="${gid}" ${s.group_ids.includes(parseInt(gid)) ? 'selected' : ''}>
+                                ${escapeHtml(groupsMap[gid])}
+                            </option>
+                        `).join('')}
+                    </select>
+                </td>
+                <td style="font-size:.85rem; color:#64748b;">${s.created_at}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteScore(${s.id}, this)"
+                            title="Delete score">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Initialize TomSelect on each group select
+        tbody.querySelectorAll('.group-select').forEach(sel => {
+            const ts = new TomSelect(sel, {
+                plugins: ['remove_button'],
+                create: false,
+                onChange: function(values) {
+                    const scoreId = sel.dataset.id;
+                    const groupIds = values.map(v => parseInt(v));
+                    saveGroups(scoreId, groupIds);
+                }
+            });
+        });
+    }
+
+    function saveField(el) {
+        const field = el.dataset.field;
+        const scoreId = el.dataset.id;
+        const value = el.textContent.trim();
+
+        fetch(`/scores/${scoreId}/update/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken,
+            },
+            body: JSON.stringify({ field, value }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showToast(data.error, 'error');
+                loadScores(); // reload to revert
+            } else {
+                showToast('Saved');
+            }
+        })
+        .catch(() => showToast('Network error', 'error'));
+    }
+
+    function saveGroups(scoreId, groupIds) {
+        fetch(`/scores/${scoreId}/update/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken,
+            },
+            body: JSON.stringify({ field: 'groups', value: groupIds }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) showToast(data.error, 'error');
+            else showToast('Groups updated');
+        })
+        .catch(() => showToast('Network error', 'error'));
+    }
+
+    function deleteScore(id, btn) {
+        if (!confirm('Delete this score? This cannot be undone.')) return;
+
+        fetch(`/scores/${id}/delete/`, {
+            method: 'POST',
+            headers: { 'X-CSRFToken': csrftoken },
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                btn.closest('tr').remove();
+                showToast('Score deleted');
+            } else {
+                showToast(data.error || 'Error', 'error');
+            }
+        })
+        .catch(() => showToast('Network error', 'error'));
+    }
+
+    function clearFilters() {
+        document.getElementById('filterName').value = '';
+        document.getElementById('filterAuthor').value = '';
+        document.getElementById('filterGroup').value = '';
+        loadScores();
+    }
+
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text || '';
+        return d.innerHTML;
+    }
+
+    function debounce(fn, ms) {
+        let timer;
+        return function(...args) {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), ms);
+        };
+    }
+</script>
+{% endblock %}
