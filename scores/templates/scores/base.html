@@ -29,7 +29,7 @@
         transition: transform 0.3s ease-in-out; /* Smooth slide for offcanvas */
     }
     /* Hide sidebar on mobile by default */
-    @media (max-width: 768px) {
+    @media (max-width: 10000000px) {
         .sidebar {
             transform: translateX(-100%);
         }
@@ -41,7 +41,7 @@
         }
     }
     /* Desktop: fixed sidebar */
-    @media (min-width: 769px) {
+    @media (min-width: 10000000px) {
         .main-content {
             margin-left: var(--sidebar-width);
         }
@@ -112,7 +112,7 @@
     .page-body {
         padding: 1.25rem 1.5rem;
     }
-    @media (max-width: 768px) {
+    @media (max-width: 10000000px) {
         .page-body {
             padding: 1rem;
         }
@@ -146,7 +146,7 @@
         flex-wrap: wrap;
         align-items: end;
     }
-    @media (max-width: 768px) {
+    @media (max-width: 1000000px) {
         .filter-bar {
             padding: .5rem;
             gap: .5rem;
@@ -190,7 +190,7 @@
         width: 100%;
         box-sizing: border-box;
     }
-    @media (max-width: 768px) {
+    @media (max-width: 10000000px) {
         #osmdContainer {
             min-height: 300px;
             padding: .75rem;
@@ -202,7 +202,7 @@
         right: 1.5rem;
         z-index: 9999;
     }
-    @media (max-width: 576px) {
+    @media (max-width: 1000000px) {
         .toast-container {
             bottom: 1rem;
             right: 1rem;
@@ -213,7 +213,7 @@
     body.sidebar-open {
         overflow: hidden;
     }
-    @media (max-width: 768px) {
+    @media (max-width: 10000000px) {
         body.sidebar-open::before {
             content: '';
             position: fixed;
@@ -255,7 +255,7 @@
 </div>
 <div class="main-content">
     <div class="topbar">
-        <button class="mobile-menu-toggle d-md-none" id="mobileMenuToggle">
+        <button class="mobile-menu-toggle" id="mobileMenuToggle">
             <i class="bi bi-list"></i>
         </button>
         <h5 class="mb-0 flex-grow-1 me-3">{% block page_title %}{% endblock %}</h5>
@@ -316,7 +316,7 @@
 
     // Close sidebar on overlay click (mobile only)
     document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 768 && e.target === document.body && document.body.classList.contains('sidebar-open')) {
+        if (window.innerWidth <= 10000000 && e.target === document.body && document.body.classList.contains('sidebar-open')) {
             document.getElementById('sidebar').classList.remove('show');
             document.body.classList.remove('sidebar-open');
         }
@@ -325,7 +325,7 @@
     // Close sidebar on nav link click (mobile)
     document.querySelectorAll('.sidebar-nav a').forEach(link => {
         link.addEventListener('click', function() {
-            if (window.innerWidth <= 768) {
+            if (window.innerWidth <= 10000000) {
                 document.getElementById('sidebar').classList.remove('show');
                 document.body.classList.remove('sidebar-open');
             }
@@ -334,7 +334,7 @@
 
     // Resize handler to close mobile sidebar on desktop
     window.addEventListener('resize', function() {
-        if (window.innerWidth > 768) {
+        if (window.innerWidth > 10000000) {
             document.getElementById('sidebar').classList.remove('show');
             document.body.classList.remove('sidebar-open');
         }
