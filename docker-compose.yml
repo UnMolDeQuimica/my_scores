@@ -1,36 +1,23 @@
-version: '3.8'
-
 services:
-  web:
-    build: .
-    command: >
-      sh -c "python manage.py migrate &&
-             gunicorn scoremanager.wsgi:application --bind 0.0.0.0:8007 --workers 3"
+  django: &django
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: my_scores_django
+    container_name: my_scores_django
+    depends_on:
+      - redis
     volumes:
-      - sqlite_data:/code/db
-      - media_data:/code/media
-      - static_data:/code/staticfiles
-    expose:
-      - "8007"
-    env_file:
-      - .env
-    environment:
-      - DJANGO_DB_PATH=/code/db/db.sqlite3
-    restart: unless-stopped
+      - static_volume:/static
+    ports:
+      - '8007:8007'
 
-  # nginx:
-  #   image: nginx:1.25-alpine
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-  #     - static_data:/code/staticfiles:ro
-  #     - media_data:/code/media:ro
-  #   ports:
-  #     - "8006:80"
-  #   depends_on:
-  #     - web
-  #   restart: unless-stopped
+  redis:
+    image: docker.io/redis:6
+    container_name: my_scores_redis_data
+    volumes:
+      - my_scores_redis_data:/data
 
 volumes:
-  sqlite_data:
-  media_data:
-  static_data:
+  static_volume: {}
+  my_scores_redis_data: {}

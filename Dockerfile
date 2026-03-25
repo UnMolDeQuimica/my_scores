@@ -1,21 +1,22 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /code
-
-COPY requirements.txt /code/
-RUN pip install --upgrade pip && pip install -r requirements.txt
-
-COPY . /code/
-
-# Create directories for persistent data and static files
-RUN mkdir -p /code/db /code/staticfiles /code/media
-
-# Collect static files
-RUN python manage.py collectstatic --noinput
-
+# Port used by this container to serve HTTP.
 EXPOSE 8007
 
-CMD python manage.py migrate && gunicorn scoremanager.wsgi:application --bind 0.0.0.0:8007 --workers 3
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8007
+
+# Set work directory
+WORKDIR /code
+
+# Install dependencies
+COPY requirements.txt /code/
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# Copy project
+COPY . /code/
+
+# Run migrations and start server
+CMD python manage.py migrate && python manage.py runserver 0.0.0.0:8007
